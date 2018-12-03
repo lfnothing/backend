@@ -109,7 +109,6 @@ func BackendStart() {
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	<-ch
 
-	// 携程退出
 	backend.Stop()
 }
 
