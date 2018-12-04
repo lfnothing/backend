@@ -56,7 +56,7 @@ func (this *Backend) Serve() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	for k, v := range this.tasks {
-		this.groups.Add(2)
+		this.groups.Add(1)
 
 		// pass param
 		go func(key string, task *Task) {
