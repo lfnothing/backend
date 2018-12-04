@@ -84,7 +84,7 @@ func TestBackend_Serve(t *testing.T) {
 	go BackendStart()
 
 	go func() {
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 100; i++ {
 			job1 := Backend1TaskJob{
 				Seq: i,
 			}
@@ -93,7 +93,7 @@ func TestBackend_Serve(t *testing.T) {
 	}()
 
 	go func() {
-		for i := 0; i < 10; i++ {
+		for i := 0; i < 100; i++ {
 			job2 := Backend2TaskJob{
 				Seq: i,
 			}
@@ -101,6 +101,5 @@ func TestBackend_Serve(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(20 * time.Second)
-
+	time.Sleep(10 * time.Second)
 }

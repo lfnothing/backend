@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"fmt"
 	syncfile "github.com/lfonthing/sync_file"
 	"os"
@@ -17,17 +18,11 @@ import (
 const (
 	default_backend_task_interal          = 60 * time.Second
 	default_backend_task_duration         = 10 * time.Minute
-	default_backend_storage_rotation_time = 5 * time.Second
+	default_backend_storage_rotation_time = 1 * time.Second
 )
-
-type BackendServiceData struct {
-	Name string
-	Task Job
-}
 
 type Backend struct {
 	tasks         map[string]*Task
-	taskJobs      map[string]Job
 	tasksInteral  map[string]time.Duration
 	tasksDuration map[string]time.Duration
 	jobChannel    map[string]chan Job
@@ -41,7 +36,6 @@ type Backend struct {
 func NewBackend() *Backend {
 	return &Backend{
 		tasks:         make(map[string]*Task),
-		taskJobs:      make(map[string]Job),
 		storage:       make(map[string]*syncfile.SyncFile),
 		filepath:      make(map[string]string),
 		tasksInteral:  make(map[string]time.Duration),
@@ -59,6 +53,8 @@ var (
 
 func (this *Backend) Serve() {
 	defer this.groups.Done()
+
+	ctx, cancel := context.WithCancel(context.Background())
 	for k, v := range this.tasks {
 		this.groups.Add(2)
 
@@ -70,7 +66,14 @@ func (this *Backend) Serve() {
 			defer ticker.Stop()
 			for {
 				select {
+				// exit all task then save all jobs
 				case <-this.closing:
+					cancel()
+					sf := this.storage[key]
+					taskCount := this.tasks[key].TaskCount()
+					for i := 0; i < taskCount; i++ {
+						sf.Write(this.tasks[key].NextJob().Encode())
+					}
 					return
 
 				case input := <-this.jobChannel[key]:
@@ -80,15 +83,21 @@ func (this *Backend) Serve() {
 					}
 
 				case <-ticker.C:
-					sf := this.storage[key]
-					if sf.GetFileSize() != 0 {
-						data, err := sf.Cut()
-						if err != nil {
-							fmt.Printf("Failed to get task [%s] from filepath [%s]\n", key, this.filepath[key])
-						} else {
-							go this.taskJobs[key].Decode(data).Do()
-						}
+					if this.tasks[key].Overload() {
+						break
 					}
+					sf := this.storage[key]
+					if sf.GetFileSize() == 0 {
+						break
+					}
+					data, err := sf.Cut()
+					if err != nil {
+						fmt.Printf("Failed to get task [%s] from filepath [%s]\n", key, this.filepath[key])
+						break
+					}
+					task := this.tasks[key]
+					task.AppendJob(task.job.Decode(data))
+					go task.Do(ctx)
 				}
 			}
 		}(k, v)
@@ -148,8 +157,7 @@ func RegisterBackend(filepath string, job Job, times ...time.Duration) {
 		duration = times[1]
 	}
 
-	backend.tasks[name] = NewTask(interal, duration)
-	backend.taskJobs[name] = job
+	backend.tasks[name] = NewTask(job, interal, duration)
 	backend.filepath[name] = filepath
 	backend.storage[name] = syncfile.NewSyncFile(filepath, true)
 	backend.tasksInteral[name] = interal

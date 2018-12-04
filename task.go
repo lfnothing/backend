@@ -1,9 +1,23 @@
 package backend
 
 import (
+	"context"
 	"sync"
 	"time"
 )
+
+//--------------------------------------
+// job
+//--------------------------------------
+
+type Job interface {
+	BackendName
+	Prepare() bool
+	Do() bool
+	Save()
+	Encode() []byte
+	Decode([]byte) Job
+}
 
 //--------------------------------------
 // task
@@ -14,19 +28,37 @@ const (
 )
 
 type Task struct {
+	job      Job
+	jobs     []Job
 	count    int
 	interal  time.Duration
 	duration time.Duration
 	lock     *sync.RWMutex
 }
 
-func NewTask(interal time.Duration, duration time.Duration) *Task {
+func NewTask(job Job, interal time.Duration, duration time.Duration) *Task {
 	return &Task{
+		job:      job,
+		jobs:     make([]Job, 0),
 		count:    0,
 		lock:     &sync.RWMutex{},
 		interal:  interal,
 		duration: duration,
 	}
+}
+
+func (t *Task) AppendJob(job Job) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	t.jobs = append(t.jobs, job)
+}
+
+func (t *Task) NextJob() (job Job) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	job = t.jobs[0]
+	t.jobs = t.jobs[1:]
+	return
 }
 
 func (t *Task) TaskCount() int {
@@ -75,37 +107,41 @@ func (t *Task) GetDuration() time.Duration {
 	return t.duration
 }
 
-type Job interface {
-	BackendName
-	Prepare() bool
-	Do() bool
-	Save()
-	Encode() []byte
-	Decode([]byte) Job
-}
-
-func (t *Task) Do(job Job) {
-	if success := job.Prepare(); !success {
-		job.Save()
-		return
-	}
-
+func (t *Task) Do(ctx context.Context) {
 	t.Add()
-	var fail = true
-	var interal = t.GetInteral()
-	var expire = time.Now().Add(t.GetDuration())
-	for now := time.Now(); now.Before(expire); {
-		if finsh := job.Do(); finsh {
-			fail = false
-			break
+	defer t.Reduce()
+	job := t.NextJob()
+
+	for {
+		select {
+		case <-ctx.Done():
+			t.AppendJob(job)
+			return
+
+		default:
+			if success := job.Prepare(); !success {
+				job.Save()
+				return
+			}
+
+			var fail = true
+			var interal = t.GetInteral()
+			var expire = time.Now().Add(t.GetDuration())
+			for now := time.Now(); now.Before(expire); {
+				if finsh := job.Do(); finsh {
+					fail = false
+					break
+				}
+				if time.Now().After(now.Add(interal)) {
+					continue
+				}
+				time.Sleep(interal - time.Now().Sub(now))
+			}
+
+			if fail {
+				job.Save()
+			}
+			return
 		}
-		if time.Now().After(now.Add(interal)) {
-			continue
-		}
-		time.Sleep(interal - time.Now().Sub(now))
 	}
-	if fail {
-		job.Save()
-	}
-	t.Reduce()
 }
