@@ -109,9 +109,7 @@ func (t *Task) GetDuration() time.Duration {
 
 func (t *Task) Do(ctx context.Context) {
 	t.Add()
-	defer t.Reduce()
 	job := t.NextJob()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -121,6 +119,7 @@ func (t *Task) Do(ctx context.Context) {
 		default:
 			if success := job.Prepare(); !success {
 				job.Save()
+				t.Reduce()
 				return
 			}
 
@@ -141,6 +140,7 @@ func (t *Task) Do(ctx context.Context) {
 			if fail {
 				job.Save()
 			}
+			t.Reduce()
 			return
 		}
 	}

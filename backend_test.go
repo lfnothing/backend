@@ -101,5 +101,5 @@ func TestBackend_Serve(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(10 * time.Second)
+	time.Sleep(100 * time.Second)
 }
