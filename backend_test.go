@@ -14,16 +14,12 @@ type TaskJob struct {
 
 type Backend1TaskJob TaskJob
 
-func (this *Backend1TaskJob) BackendName() string {
+func (this *Backend1TaskJob) TaskName() string {
 	return "backend1taskjob"
 }
 
-func (this *Backend1TaskJob) Save() {
-	SendJob(this)
-}
-
 func (this *Backend1TaskJob) Encode() (data []byte) {
-	data, _ = json.MarshalIndent(this, "", "  ")
+	data, _ = json.Marshal(this)
 	return
 }
 
@@ -35,26 +31,25 @@ func (this *Backend1TaskJob) Decode(data []byte) (j Job) {
 }
 
 func (this *Backend1TaskJob) Prepare() bool {
-	return false
+	return true
 }
 
 func (this *Backend1TaskJob) Do() bool {
-	fmt.Fprintf(os.Stderr, "Backend [%s] task with seq [%d]\n", this.BackendName(), this.Seq)
+	if this.Seq > 10 {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "%-10s task [%s] with seq [%d]\n", "Parallel", this.TaskName(), this.Seq)
 	return true
 }
 
 type Backend2TaskJob TaskJob
 
-func (this *Backend2TaskJob) BackendName() string {
+func (this *Backend2TaskJob) TaskName() string {
 	return "backend2taskjob"
 }
 
-func (this *Backend2TaskJob) Save() {
-	SendJob(this)
-}
-
 func (this *Backend2TaskJob) Encode() (data []byte) {
-	data, _ = json.MarshalIndent(this, "", "  ")
+	data, _ = json.Marshal(this)
 	return
 }
 
@@ -70,13 +65,16 @@ func (this *Backend2TaskJob) Prepare() bool {
 }
 
 func (this *Backend2TaskJob) Do() bool {
-	fmt.Fprintf(os.Stderr, "Backend [%s] task with seq [%d]\n", this.BackendName(), this.Seq)
+	if this.Seq > 10 {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "%-10s task [%s] with seq [%d]\n", "Serial", this.TaskName(), this.Seq)
 	return true
 }
 
 func TestRegisterBackend(t *testing.T) {
-	RegisterBackend("backend1task.json", new(Backend1TaskJob))
-	RegisterBackend("backend2task.json", new(Backend2TaskJob))
+	RegisterBackend(new(Backend1TaskJob), Parallel)
+	RegisterBackend(new(Backend2TaskJob), Serial)
 }
 
 func TestBackend_Serve(t *testing.T) {
@@ -84,7 +82,7 @@ func TestBackend_Serve(t *testing.T) {
 	go BackendStart()
 
 	go func() {
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 12; i++ {
 			job1 := Backend1TaskJob{
 				Seq: i,
 			}
@@ -93,7 +91,7 @@ func TestBackend_Serve(t *testing.T) {
 	}()
 
 	go func() {
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 12; i++ {
 			job2 := Backend2TaskJob{
 				Seq: i,
 			}
@@ -101,5 +99,5 @@ func TestBackend_Serve(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(100 * time.Second)
+	time.Sleep(200 * time.Second)
 }

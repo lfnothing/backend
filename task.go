@@ -11,136 +11,122 @@ import (
 //--------------------------------------
 
 type Job interface {
-	BackendName
+	TaskName
 	Prepare() bool
 	Do() bool
-	Save()
 	Encode() []byte
 	Decode([]byte) Job
+}
+
+//--------------------------------------
+// broker
+//--------------------------------------
+
+type Broker interface {
+	Init()
+	Set(string, string, []byte)
+	Get(string, string) []byte
+	Delete(string, string)
 }
 
 //--------------------------------------
 // task
 //--------------------------------------
 
+type TaskName interface {
+	TaskName() string
+}
+
 const (
 	default_max_task = 100
 )
 
 type Task struct {
-	job      Job
-	jobs     []Job
-	count    int
+	name     string
+	doing    int
 	interal  time.Duration
 	duration time.Duration
+	manager  *Manager
 	lock     *sync.RWMutex
 }
 
-func NewTask(job Job, interal time.Duration, duration time.Duration) *Task {
+func NewTask(j Job, mode TaskModel, interal time.Duration, duration time.Duration, broker Broker) *Task {
 	return &Task{
-		job:      job,
-		jobs:     make([]Job, 0),
-		count:    0,
+		name:     j.TaskName(),
+		doing:    0,
 		lock:     &sync.RWMutex{},
 		interal:  interal,
 		duration: duration,
+		manager:  NewManager(j, mode, broker),
 	}
 }
 
-func (t *Task) AppendJob(job Job) {
+func (t *Task) TaskAdd() {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-	t.jobs = append(t.jobs, job)
+	t.doing++
 }
 
-func (t *Task) NextJob() (job Job) {
+func (t *Task) TaskReduce() {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-	job = t.jobs[0]
-	t.jobs = t.jobs[1:]
-	return
+	t.doing--
 }
 
-func (t *Task) TaskCount() int {
+func (t *Task) TaskDoing() int {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
-	return t.count
+	return t.doing
 }
 
-func (t *Task) Add() {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-	t.count++
+func (t *Task) TaskOverload() bool {
+	return t.TaskDoing() > default_max_task
 }
 
-func (t *Task) Reduce() {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-	t.count--
+func (this *Task) Enqueue(job Job) {
+	this.manager.Enqueue(this.name, job)
 }
 
-func (t *Task) Overload() bool {
-	return t.TaskCount() > default_max_task
-}
+func (this *Task) Do(ctx context.Context) {
+	if this.TaskOverload() {
+		return
+	}
 
-func (t *Task) SetInteral(interal time.Duration) {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-	t.interal = interal
-}
+	job, sign, success := this.manager.Dequeue(this.name)
+	if !success {
+		return
+	}
 
-func (t *Task) GetInteral() time.Duration {
-	t.lock.RLock()
-	t.lock.RUnlock()
-	return t.interal
-}
-
-func (t *Task) SetDuration(duration time.Duration) {
-	t.lock.Lock()
-	t.lock.Unlock()
-	t.duration = duration
-}
-
-func (t *Task) GetDuration() time.Duration {
-	t.lock.RLock()
-	t.lock.RUnlock()
-	return t.duration
-}
-
-func (t *Task) Do(ctx context.Context) {
-	t.Add()
-	job := t.NextJob()
+	this.TaskAdd()
 	for {
 		select {
 		case <-ctx.Done():
-			t.AppendJob(job)
+			this.TaskReduce()
+			this.manager.JobFailed(this.name, job, sign)
 			return
 
 		default:
-			if success := job.Prepare(); !success {
-				job.Save()
-				t.Reduce()
-				return
+			var expire = time.Now().Add(this.duration)
+			if success = job.Prepare(); !success {
+				goto Exit
 			}
 
-			var fail = true
-			var interal = t.GetInteral()
-			var expire = time.Now().Add(t.GetDuration())
 			for now := time.Now(); now.Before(expire); {
-				if finsh := job.Do(); finsh {
-					fail = false
-					break
+				if success = job.Do(); success {
+					goto Exit
 				}
-				if time.Now().After(now.Add(interal)) {
+				if time.Now().After(now.Add(this.interal)) {
 					continue
 				}
-				time.Sleep(interal - time.Now().Sub(now))
+				time.Sleep(this.interal - time.Now().Sub(now))
 			}
-
-			if fail {
-				job.Save()
+		Exit:
+			this.TaskReduce()
+			if !success {
+				this.manager.JobFailed(this.name, job, sign)
+				return
 			}
-			t.Reduce()
+			this.manager.JobSucceed(this.name, sign)
 			return
 		}
 	}
